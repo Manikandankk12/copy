@@ -33,24 +33,27 @@ spec:
               node /app.js
           ports:
             - containerPort: 5000
+
 ---
 # =======================================================
-# BACKEND SERVICE (ClusterIP - INTERNAL ONLY)
+# BACKEND SERVICE (NodePort)
 # =======================================================
 apiVersion: v1
 kind: Service
 metadata:
   name: backend-service
 spec:
-  type: ClusterIP
+  type: NodePort
   selector:
     app: backend
   ports:
     - port: 5000
       targetPort: 5000
+      nodePort: 30083   # external backend port
+
 ---
 # =======================================================
-# FRONTEND DEPLOYMENT (NGINX serving HTML)
+# FRONTEND DEPLOYMENT
 # =======================================================
 apiVersion: apps/v1
 kind: Deployment
@@ -78,9 +81,10 @@ spec:
         - name: html
           configMap:
             name: frontend-html
+
 ---
 # =======================================================
-# FRONTEND HTML (calls backend via Kubernetes DNS)
+# FRONTEND HTML CONFIGMAP (Calls Backend via NodePort)
 # =======================================================
 apiVersion: v1
 kind: ConfigMap
@@ -91,15 +95,12 @@ data:
     <html>
     <body>
       <h1>Frontend</h1>
-      <p>Click to load backend message</p>
-
       <button onclick="callBackend()">Call Backend</button>
-
       <p id="response"></p>
 
       <script>
         function callBackend() {
-          fetch("http://backend-service:5000")
+          fetch("http://192.168.156.8:30083")
             .then(res => res.text())
             .then(data => document.getElementById("response").innerHTML = data)
             .catch(err => document.getElementById("response").innerHTML = "Error: " + err);
@@ -107,6 +108,7 @@ data:
       </script>
     </body>
     </html>
+
 ---
 # =======================================================
 # FRONTEND SERVICE (NodePort)
