@@ -1,0 +1,125 @@
+# =======================================================
+# BACKEND DEPLOYMENT
+# =======================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app: backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: node:14
+          command: ["sh", "-c"]
+          args:
+            - |
+              cat <<EOF > /app.js
+              const http = require('http');
+              const server = http.createServer((req, res) => {
+                res.end("Hello from backend!");
+              });
+              server.listen(5000);
+              EOF
+              node /app.js
+          ports:
+            - containerPort: 5000
+---
+# =======================================================
+# BACKEND SERVICE (ClusterIP - INTERNAL ONLY)
+# =======================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+spec:
+  type: ClusterIP
+  selector:
+    app: backend
+  ports:
+    - port: 5000
+      targetPort: 5000
+---
+# =======================================================
+# FRONTEND DEPLOYMENT (NGINX serving HTML)
+# =======================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  labels:
+    app: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: nginx:latest
+          volumeMounts:
+            - name: html
+              mountPath: /usr/share/nginx/html
+      volumes:
+        - name: html
+          configMap:
+            name: frontend-html
+---
+# =======================================================
+# FRONTEND HTML (calls backend via Kubernetes DNS)
+# =======================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-html
+data:
+  index.html: |
+    <html>
+    <body>
+      <h1>Frontend</h1>
+      <p>Click to load backend message</p>
+
+      <button onclick="callBackend()">Call Backend</button>
+
+      <p id="response"></p>
+
+      <script>
+        function callBackend() {
+          fetch("http://backend-service:5000")
+            .then(res => res.text())
+            .then(data => document.getElementById("response").innerHTML = data)
+            .catch(err => document.getElementById("response").innerHTML = "Error: " + err);
+        }
+      </script>
+    </body>
+    </html>
+---
+# =======================================================
+# FRONTEND SERVICE (NodePort)
+# =======================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+spec:
+  type: NodePort
+  selector:
+    app: frontend
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: 30082
