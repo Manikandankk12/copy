@@ -1,0 +1,87 @@
+#!/bin/bash
+set -e
+
+# -----------------------------
+# CONFIG
+# -----------------------------
+IMAGE_NAME="manikandan1210/python-cicd-app"
+IMAGE_TAG="$BUILD_NUMBER"
+FULL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
+KEEP_TAGS=2
+DEPLOYMENT_NAME="python-app"
+K8S_NAMESPACE="default"
+
+echo "Starting Jenkins Freestyle build..."
+
+# -----------------------------
+# BUILD DOCKER IMAGE
+# -----------------------------
+echo "Building Docker image..."
+docker build -t "$FULL_IMAGE" .
+
+docker tag "$FULL_IMAGE" "${IMAGE_NAME}:latest"
+
+# -----------------------------
+# LOGIN & PUSH
+# -----------------------------
+echo "Logging into Docker Hub..."
+echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+
+echo "Pushing Docker images..."
+docker push "$FULL_IMAGE"
+docker push "${IMAGE_NAME}:latest"
+
+# -----------------------------
+# DOCKER HUB JWT LOGIN
+# -----------------------------
+echo "Authenticating to Docker Hub API..."
+
+JWT=$(curl -s -X POST https://hub.docker.com/v2/users/login/ \
+  -H "Content-Type: application/json" \
+  -d "{\"username\": \"$DOCKER_USER\", \"password\": \"$DOCKER_PASS\"}" \
+  | jq -r .token)
+
+if [ -z "$JWT" ] || [ "$JWT" = "null" ]; then
+  echo "Failed to retrieve Docker Hub JWT"
+  exit 1
+fi
+
+# -----------------------------
+# CLEANUP OLD TAGS
+# -----------------------------
+echo "Cleaning old Docker Hub numeric tags (keep last 3)..."
+
+ALL_TAGS=$(curl -s \
+  -H "Authorization: JWT $JWT" \
+  "https://hub.docker.com/v2/repositories/${IMAGE_NAME}/tags/?page_size=100" \
+  | jq -r '.results[].name')
+
+NUMERIC_TAGS=$(echo "$ALL_TAGS" | grep -E '^[0-9]+$' | sort -nr)
+
+COUNT=0
+for TAG in $NUMERIC_TAGS; do
+  COUNT=$((COUNT+1))
+
+  if [ "$COUNT" -gt "$KEEP_TAGS" ]; then
+    echo "Deleting tag: $TAG"
+    curl -s -X DELETE \
+      -H "Authorization: JWT $JWT" \
+      "https://hub.docker.com/v2/repositories/${IMAGE_NAME}/tags/$TAG/"
+  else
+    echo "Keeping tag: $TAG"
+  fi
+done
+
+# -----------------------------
+# DEPLOY TO KUBERNETES
+# -----------------------------
+echo "Deploying to Kubernetes..."
+
+kubectl set image deployment/"$DEPLOYMENT_NAME" \
+  python-cicd="$FULL_IMAGE" \
+  -n "$K8S_NAMESPACE"
+
+kubectl rollout status deployment/"$DEPLOYMENT_NAME" \
+  -n "$K8S_NAMESPACE" --timeout=60s
+
+echo "Build, cleanup, and deployment completed successfully"
